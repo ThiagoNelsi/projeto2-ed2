@@ -82,15 +82,60 @@ void inserir_no_indice(INDICE * indice, seg segurado, int byteoffset) {
     return;
 }
 
+INDICE * criar_indice(FILE * indice_fp, FILE * arquivo_dados) {
+    INDICE * indice = (INDICE*) malloc(sizeof(INDICE) * TAM_MAX);
+
+    indice_fp = fopen("indice.dad", "w+b");
+
+    for (int i = 0; i < TAM_MAX; i++) {
+        strcpy(indice[i].cod_cli, "");
+        indice[i].pos = -1;
+    }
+
+    rewind(arquivo_dados);
+    while (1) {
+        int posicao_atual = ftell(arquivo_dados);
+        fseek(arquivo_dados, 0, SEEK_END);
+        if (posicao_atual == ftell(arquivo_dados)) break;
+        fseek(arquivo_dados, posicao_atual, SEEK_SET);
+
+        unsigned char tam_buffer;
+        char buffer[135];
+
+        fread(&tam_buffer, sizeof(char), 1, arquivo_dados);
+        fread(buffer, sizeof(char), tam_buffer, arquivo_dados);
+
+        char * codigo_cli = strtok(buffer, "#");
+
+        seg segurado;
+        strcpy(segurado.cod_cli, codigo_cli);
+
+        inserir_no_indice(indice, segurado, posicao_atual);
+    }
+
+    escrever_no_arquivo_indice(indice_fp, indice);
+
+    return indice;
+}
+
 // Função para ler o arquivo de índices e armazenar em um vetor de structs
-INDICE * ler_indice(FILE * indice_fp) {
+INDICE * ler_indice(FILE * indice_fp, FILE * fp) {
+    INDICE * indice1 = criar_indice(indice_fp, fp);
+    return indice1;
+
     INDICE * indice = (INDICE*) malloc(sizeof(INDICE) * TAM_MAX);
     int cont = 0;
-    while (!feof(indice_fp)) {
+    rewind(indice_fp);
+
+    for (int i = 0; i < TAM_MAX; i++) {
+        strcpy(indice[i].cod_cli, "");
+        indice[i].pos = -1;
+    }
+
+    while (1) {
         int posicao_atual = ftell(indice_fp);
         fseek(indice_fp, 0, SEEK_END);
         if (posicao_atual == ftell(indice_fp)) break;
-
         fseek(indice_fp, posicao_atual, SEEK_SET);
 
         char cod_cli[4];
@@ -247,6 +292,15 @@ int main() {
     FILE * indice_secundario_lista_fp = fopen("indice_secundario_lista.dad", "r+b");
     if(indice_secundario_lista_fp == NULL) indice_secundario_lista_fp = fopen("indice_secundario_lista.dad", "w+b");
 
+    FILE * status_de_saida_fp = fopen("status_saida.dad", "r+b");
+    if(status_de_saida_fp == NULL) {
+        status_de_saida_fp = fopen("status_saida.dad", "w+b");
+        int um = 1;
+        rewind(status_de_saida_fp);
+        fwrite(&um, sizeof(int), 1, status_de_saida_fp);
+        fflush(status_de_saida_fp);
+    }
+
     //Declaração das variáveis dos registros
     char codigo[4];
     char nome[50], seguradora[50], tipo_seg[30], buffer_aux[135];
@@ -262,7 +316,23 @@ int main() {
     seg segurado[32];
     int i = 0;
 
-    INDICE * indice = ler_indice(indice_fp);
+    int status_de_saida;
+    fread(&status_de_saida, sizeof(int), 1, status_de_saida_fp);
+
+    INDICE * indice;
+
+    if (status_de_saida == 1) {
+        indice = criar_indice(indice_fp, fp);
+    } else {
+        indice = ler_indice(indice_fp, fp);
+    }
+
+    status_de_saida = 1;
+
+    rewind(status_de_saida_fp);
+    fwrite(&status_de_saida, sizeof(int), 1, status_de_saida_fp);
+    fflush(status_de_saida_fp);
+
     INDICE_SECUNDARIO * indice_secundario = criar_indice_secundario(fp, indice_secundario_fp, indice_secundario_lista_fp);
     escrever_no_arquivo_indice_secundario(indice_secundario_fp, indice_secundario);
 
@@ -321,6 +391,8 @@ int main() {
     //Flag para verificar se a inserção foi feita um a um ou todos de uma vez
     int flag_tipo_de_insercao = -1;
 
+    int contador_inserir_todos = 0;
+
     //Menu de funções
     while(funcao != 0) {
 
@@ -375,8 +447,6 @@ int main() {
 
             inserir_no_indice(indice, segurado[index], pos_arquivo_principal);
             inserir_no_indice_secundario(indice_secundario, segurado[index], indice_secundario_lista_fp);
-            escrever_no_arquivo_indice(indice_fp, indice);
-            escrever_no_arquivo_indice_secundario(indice_secundario_fp, indice_secundario);
 
             flag_tipo_de_insercao = 1;
         }
@@ -387,6 +457,10 @@ int main() {
         //OBS: Usar INSERIR_UM_A_UM na execução implica em não usar INSERIR_TODOS
         else if(funcao == INSERIR_TODOS) {
 
+            if(contador_inserir_todos == 1) {
+                printf("Dados já totalmente inseridos.\n"); 
+                break;
+            }
             if(flag_tipo_de_insercao == 1) {
                 printf("Não é possível inserir todos os dados de uma vez após já ter inserido pelo menos um separadamente.\n");
                 return 0;
@@ -402,9 +476,8 @@ int main() {
                 fwrite(buffer_aux, sizeof(char), tam_buff, fp);
                 inserir_no_indice(indice, segurado[j], pos_arquivo_principal);
                 inserir_no_indice_secundario(indice_secundario, segurado[j], indice_secundario_lista_fp);
-                escrever_no_arquivo_indice(indice_fp, indice);
-                escrever_no_arquivo_indice_secundario(indice_secundario_fp, indice_secundario);
             }
+            contador_inserir_todos++;
         }
 
         else if (funcao == PESQUISAR_POR_CHAVE_PRIMARIA) {
@@ -431,55 +504,6 @@ int main() {
                     break;
                 }
             }
-            // BUSCA_P busca_p[TAM_MAX];
-            // BUSCA_P busca_p_utilizados[TAM_MAX];
-            // int i = 0;
-
-            // FILE * busca_primaria_fp = fopen("busca_p.bin", "rb");
-            // FILE * busca_primaria_utilizados_fp = fopen("busca_p_utilizados.bin", "r+b");
-
-            // while (!feof(busca_primaria_utilizados_fp)) {
-            //     printf("i: %d\n", i);
-            //     fread(busca_p_utilizados[i++].cod_cli, sizeof(char), 4, busca_primaria_fp);
-            // }
-
-            // i = 0;
-            // while (!feof(busca_primaria_fp)) {
-            //     char aux[4];
-            //     fread(aux, sizeof(char), 4, busca_primaria_fp);
-
-            //     int ja_usado = 0;
-            //     for (int j = 0; j < TAM_MAX; j++) {
-            //         if (strcmp(busca_p_utilizados[j].cod_cli, aux) == 0) {
-            //             ja_usado = 1;
-            //             break;
-            //         }
-            //     }
-
-            //     if (ja_usado) continue;
-
-            //     strcpy(busca_p[i++].cod_cli, aux);
-            // }
-
-            // for (int i = 0; i < TAM_MAX; i++) {
-            //     printf("%s\n", busca_p[i].cod_cli);
-            // }
-
-            // char resposta;
-            // i = 0;
-            // while (1) {
-            //     printf("Ler próximo? [s/n]\n");
-            //     scanf("%c", &resposta);
-
-            //     if (resposta == 'n') break;
-
-            //     fwrite(busca_p[i].cod_cli, sizeof(char), 4, busca_primaria_utilizados_fp);
-
-            //     pesquisar_por_chave_primaria(busca_p[i++].cod_cli, fp, indice);
-
-            // }
-            // fclose(busca_primaria_fp);
-            // fclose(busca_primaria_utilizados_fp);
         }
         else if (funcao == PESQUISAR_POR_CHAVE_SECUNDARIA) {
             char seguradora[50];
@@ -509,10 +533,19 @@ int main() {
         }
     }
 
+    escrever_no_arquivo_indice(indice_fp, indice);
+    escrever_no_arquivo_indice_secundario(indice_secundario_fp, indice_secundario);
+
+    status_de_saida = 0;
+
+    rewind(status_de_saida_fp);
+    fwrite(&status_de_saida, sizeof(int), 1, status_de_saida_fp);
+
     fclose(indice_fp);
     fclose(aux);
     fclose(fp);
     fclose(busca_primaria);
+    fclose(status_de_saida_fp);
     fclose(indice_secundario_fp);
     fclose(indice_secundario_lista_fp);
 }
